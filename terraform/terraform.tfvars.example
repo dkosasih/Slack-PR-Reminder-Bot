@@ -1,0 +1,33 @@
+# AWS Region (optional - defaults to us-east-1)
+aws_region = "us-east-1"
+
+# AWS Profile (optional - defaults to personal)
+aws_profile = "personal"
+
+# Function name (optional - has default)
+# function_name = "pr-reminder-slack-bot"
+
+# Slack Bot Token (REQUIRED - set this before deploying)
+slack_bot_token = "xoxb-your-token-here"
+
+# Slack Signing Secret (REQUIRED - set this before deploying)
+slack_signing_secret = "your-signing-secret-here"
+
+# Channel ID (REQUIRED - set this before deploying)
+channel_id = "C04BM708T9N"
+
+# Window Size (optional - defaults to 2)
+# window_size = 2
+
+# Custom reminder text (optional - has default)
+# reminder_text = "Your custom reminder message"
+
+# Schedule expression (optional - defaults to daily at 00:05 UTC)
+# schedule_expression = "cron(5 0 * * ? *)"
+
+# Tags (optional - has defaults)
+# tags = {
+#   Project     = "PR Reminder Slack Bot"
+#   ManagedBy   = "Terraform"
+#   Environment = "production"
+# }
