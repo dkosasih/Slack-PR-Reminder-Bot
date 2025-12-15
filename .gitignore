@@ -7,6 +7,10 @@
 # Terraform Variables (contains secrets)
 terraform.tfvars
 
+# Terraform Plans (contains secrets and is ephemeral)
+tfplan
+*.tfplan
+
 # Lambda Package
 lambda_function.zip
 

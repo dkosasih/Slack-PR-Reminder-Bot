@@ -1,13 +1,13 @@
 variable "aws_region" {
   description = "AWS region to deploy resources"
   type        = string
-  default     = "us-east-1"
+  default     = "ap-southeast-2"
 }
 
 variable "aws_profile" {
-  description = "AWS profile to use for deployment"
+  description = "AWS profile to use for deployment (optional, uses default credentials chain if not set)"
   type        = string
-  default     = "personal"
+  default     = ""
 }
 
 variable "function_name" {

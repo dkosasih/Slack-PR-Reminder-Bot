@@ -1,0 +1,12 @@
+# AWS Region (optional - defaults to us-east-1)
+aws_region = "us-east-1"
+
+# AWS Profile (optional - uses default credentials if not set)
+# aws_profile = "personal"
+
+# S3 Bucket Name (REQUIRED - must be globally unique)
+# Choose a unique name like: yourname-pr-reminder-tf-state
+state_bucket_name = "your-unique-bucket-name-here"
+
+# DynamoDB Table Name (optional - defaults to terraform-state-lock)
+# lock_table_name = "terraform-state-lock"

@@ -14,8 +14,15 @@ terraform {
 }
 
 provider "aws" {
-  region  = var.aws_region
-  profile = var.aws_profile
+  region = var.aws_region
+  # Profile is optional - uses default AWS credentials chain
+  # In CI/CD: uses IAM role from environment
+  # Locally: uses profile from var.aws_profile if set
+  profile = var.aws_profile != "" ? var.aws_profile : null
+  
+  default_tags {
+    tags = var.tags
+  }
 }
 
 # Data source to get current AWS account info
@@ -65,6 +72,9 @@ resource "aws_lambda_function" "slack_events" {
   runtime         = "python3.12"
   memory_size     = 256
   timeout         = 15
+  
+  # Limit concurrent executions to prevent bill shock
+  reserved_concurrent_executions = 10
 
   environment {
     variables = {
@@ -101,6 +111,12 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.slack_api.id
   name        = "$default"
   auto_deploy = true
+  
+  # Throttling settings to prevent abuse
+  default_route_settings {
+    throttling_burst_limit = 100   # Max requests in a burst
+    throttling_rate_limit  = 50    # Sustained requests per second
+  }
 
   tags = var.tags
 }
@@ -152,4 +168,64 @@ resource "aws_lambda_permission" "eventbridge" {
   function_name = aws_lambda_function.slack_events.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.daily_topup.arn
+}
+
+# CloudWatch Alarm for High Lambda Invocations
+resource "aws_cloudwatch_metric_alarm" "high_invocations" {
+  alarm_name          = "${var.function_name}-high-invocations"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name        = "Invocations"
+  namespace          = "AWS/Lambda"
+  period             = "300"  # 5 minutes
+  statistic          = "Sum"
+  threshold          = "1000"  # Alert if >1000 invocations in 5 min
+  alarm_description  = "This metric monitors lambda invocations for potential abuse"
+  treat_missing_data = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.slack_events.function_name
+  }
+
+  tags = var.tags
+}
+
+# CloudWatch Alarm for Lambda Errors
+resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  alarm_name          = "${var.function_name}-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name        = "Errors"
+  namespace          = "AWS/Lambda"
+  period             = "300"
+  statistic          = "Sum"
+  threshold          = "10"
+  alarm_description  = "This metric monitors lambda errors"
+  treat_missing_data = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.slack_events.function_name
+  }
+
+  tags = var.tags
+}
+
+# CloudWatch Alarm for Lambda Throttles
+resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
+  alarm_name          = "${var.function_name}-throttles"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name        = "Throttles"
+  namespace          = "AWS/Lambda"
+  period             = "60"
+  statistic          = "Sum"
+  threshold          = "5"
+  alarm_description  = "This metric monitors lambda throttling events"
+  treat_missing_data = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.slack_events.function_name
+  }
+
+  tags = var.tags
 }
