@@ -152,6 +152,8 @@ def _top_up_window_for_channel(channel: str):
                 break
 
 def lambda_handler(event, context):
+    print(f"Received event: {json.dumps(event)}")  # Debug logging
+    
     # EventBridge scheduled top-up branch
     if event.get("source") == "aws.events":
         try:
@@ -163,11 +165,14 @@ def lambda_handler(event, context):
     # Slack Events via API Gateway HTTP API
     body = event.get("body") or ""
     headers = event.get("headers", {})
+    print(f"Body length: {len(body)}, Headers: {list(headers.keys())}")  # Debug logging
 
     if not _verify_slack_signature(headers, body):
+        print("Signature verification failed!")  # Debug logging
         return {"statusCode": 403, "body": "invalid signature"}
 
     payload = json.loads(body)
+    print(f"Payload type: {payload.get('type')}, Event type: {payload.get('event', {}).get('type')}")  # Debug logging
 
     # URL verification handshake
     if payload.get("type") == "url_verification":
@@ -183,6 +188,7 @@ def lambda_handler(event, context):
             channel = ev.get("channel")
             message_ts = ev.get("message_ts")
             links = ev.get("links", [])
+            print(f"link_shared event - Channel: {channel}, Links: {links}, is_pr: {_is_pr_links(links)}")  # Debug logging
             if channel and message_ts and _is_pr_links(links):
                 base_ts = float(message_ts)
                 try:

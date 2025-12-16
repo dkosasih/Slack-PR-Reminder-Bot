@@ -123,6 +123,24 @@ terraform destroy
 
 Type `yes` when prompted to confirm deletion.
 
+
+To remove only specific resources, use the `-target` flag:
+Only destroy entrypoint resources:
+```bash
+terraform destroy \
+  -target=aws_apigatewayv2_api.slack_api \
+  -target=aws_apigatewayv2_stage.default \
+  -target=aws_apigatewayv2_route.slack_route \
+  -target=aws_apigatewayv2_integration.lambda_integration \
+  -target=aws_cloudwatch_event_rule.daily_topup \
+  -target=aws_cloudwatch_event_target.lambda_target \
+  -var="slack_bot_token=$SLACK_BOT_TOKEN" \
+  -var="slack_signing_secret=$SLACK_SIGNING_SECRET" \
+  -var="channel_id=$CHANNEL_ID" \
+  -var="aws_profile=personal"
+```
+
+
 ## Slack App Configuration
 
 After deployment, configure your Slack app:

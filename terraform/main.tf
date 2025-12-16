@@ -30,10 +30,17 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 # Create deployment package
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/../src"
-  output_path = "${path.module}/lambda_function.zip"
+# Build Lambda package with dependencies using local exec
+resource "null_resource" "lambda_build" {
+  triggers = {
+    handler_hash       = filemd5("${path.module}/../src/handler.py")
+    requirements_hash  = filemd5("${path.module}/../requirements.txt")
+  }
+
+  provisioner "local-exec" {
+    command     = "./build_lambda.sh"
+    working_dir = path.module
+  }
 }
 
 # IAM Role for Lambda
@@ -64,11 +71,12 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 
 # Lambda Function
 resource "aws_lambda_function" "slack_events" {
-  filename         = data.archive_file.lambda_zip.output_path
+  depends_on       = [null_resource.lambda_build]
+  filename         = "${path.module}/lambda_function.zip"
   function_name    = var.function_name
   role            = aws_iam_role.lambda_role.arn
   handler         = "handler.lambda_handler"
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  source_code_hash = filebase64sha256("${path.module}/lambda_function.zip")
   runtime         = "python3.12"
   memory_size     = 256
   timeout         = 15
