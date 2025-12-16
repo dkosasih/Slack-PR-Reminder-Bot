@@ -2,7 +2,7 @@
 
 Your Lambda is not being invoked when posting PR links. Here's the checklist:
 
-## 1. Verify Slack App Event Subscriptions
+## 1. App Mentions Setup (Current Approach)
 
 Go to https://api.slack.com/apps → Your App → Event Subscriptions
 
@@ -12,20 +12,20 @@ Go to https://api.slack.com/apps → Your App → Event Subscriptions
 - ✅ Status should show: **Verified ✓**
 
 **Subscribe to bot events:**
-- `link_shared` (required - triggers when PR link posted)
-- `reaction_added` (required - triggers when emoji added)
+- `app_mention` (required - triggers when users @mention the bot)
+- `reaction_added` (required - triggers when emoji added for cancellation)
 
-**App Unfurl Domains:**
-- Add domain: `github.com`
+**NO App Unfurl Domains needed** - we parse URLs from the message text directly
 
 ## 2. Verify OAuth Scopes
 
 Go to OAuth & Permissions → Scopes
 
 **Required Bot Token Scopes:**
-- `links:read` - To receive link_shared events
+- `app_mentions:read` - To receive mentions of the bot
 - `chat:write` - To send scheduled messages
-- `chat:write.public` - To post in channels without being invited
+- `reactions:write` - To react with ✅/❌/❓ confirmation
+- `reactions:read` - To detect :approved: reactions for cancellation
 
 ## 3. Reinstall App (if scopes changed)
 

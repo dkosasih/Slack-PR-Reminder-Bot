@@ -183,38 +183,76 @@ def lambda_handler(event, context):
         ev = payload.get("event", {})
         etype = ev.get("type")
 
-        # Seed rolling reminders on PR link post
-        if etype == "link_shared":
+        # Handle app mentions (when users @mention the bot with PR links)
+        if etype == "app_mention":
             channel = ev.get("channel")
-            message_ts = ev.get("message_ts")
-            links = ev.get("links", [])
-            print(f"link_shared event - Channel: {channel}, Links: {links}, is_pr: {_is_pr_links(links)}")  # Debug logging
-            if channel and message_ts and _is_pr_links(links):
-                base_ts = float(message_ts)
+            message_ts = ev.get("ts")
+            text = ev.get("text", "")
+            user = ev.get("user")
+            
+            print(f"app_mention event - Channel: {channel}, Text: {text}")  # Debug logging
+            
+            # Extract PR URLs from text (works with both plain URLs and markdown links)
+            pr_match = PR_RE.search(text)
+            
+            if pr_match and channel and message_ts:
+                pr_url = pr_match.group(0)
+                print(f"Found PR URL: {pr_url}")
+                
                 try:
-                    # Check existing scheduled times for this thread to prevent duplicates
+                    # React to confirm we received it
+                    client.reactions_add(
+                        channel=channel,
+                        timestamp=message_ts,
+                        name="white_check_mark"
+                    )
+                    
+                    # Schedule reminders for this message
+                    base_ts = float(message_ts)
                     existing_times = _get_existing_scheduled_times_for_thread(channel, message_ts)
                     
                     first = _next_business_day_10am_mel_from_epoch(base_ts)
                     _schedule_nudge_if_not_exists(channel, message_ts, first, message_ts, existing_times)
                     
-                    # Add 5 more hours from first and schedule another nudge
-                    first_plus_5h = first + (5 * 60 * 60)  # Add 5 hours in seconds
+                    # Add 5 more hours from first
+                    first_plus_5h = first + (5 * 60 * 60)
                     _schedule_nudge_if_not_exists(channel, message_ts, first_plus_5h, message_ts, existing_times)
                     
                     cursor_pa = first
                     for _ in range(WINDOW_SIZE - 1):
                         cursor_pa = _next_business_day_10am_after(cursor_pa)
                         _schedule_nudge_if_not_exists(channel, message_ts, cursor_pa, message_ts, existing_times)
-
-                         # Add 5 more hours from each subsequent day and schedule another nudge
-                        cursor_pa_plus_5h = cursor_pa + (5 * 60 * 60)  # Add 5 hours in seconds
+                        
+                        # Add 5 more hours from each subsequent day
+                        cursor_pa_plus_5h = cursor_pa + (5 * 60 * 60)
                         _schedule_nudge_if_not_exists(channel, message_ts, cursor_pa_plus_5h, message_ts, existing_times)
-
+                    
+                    print(f"Scheduled reminders for PR: {pr_url}")
+                    
                 except SlackApiError as e:
                     print(f"schedule failed: {e}")
+                    # Try to react with error indicator
+                    try:
+                        client.reactions_add(
+                            channel=channel,
+                            timestamp=message_ts,
+                            name="x"
+                        )
+                    except:
+                        pass
+            
+            elif channel and message_ts:
+                # No PR link found - react with question mark
+                try:
+                    client.reactions_add(
+                        channel=channel,
+                        timestamp=message_ts,
+                        name="question"
+                    )
+                except:
+                    pass
 
-        # Cancel pending reminders only on :approved:
+        # Cancel pending reminders on :approved: reaction
         elif etype == "reaction_added":
             if ev.get("reaction") == "approved":
                 item = ev.get("item", {})
