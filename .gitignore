@@ -14,6 +14,9 @@ tfplan
 # Lambda Package
 lambda_function.zip
 
+# Environment variables (contains secrets)
+.env
+
 # Python
 __pycache__/
 *.py[cod]

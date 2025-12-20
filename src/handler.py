@@ -68,7 +68,8 @@ def _schedule_nudge(channel: str, thread_ts: str, post_at: int, original_ts: str
         channel=channel,
         text=f"{marker} {REMINDER_TEXT}",
         post_at=post_at,
-        thread_ts=thread_ts
+        thread_ts=thread_ts,
+        reply_broadcast=True
     )
 
 def _get_existing_scheduled_times_for_thread(channel: str, original_ts: str) -> set[int]:
@@ -266,3 +267,7 @@ def lambda_handler(event, context):
                             print(f"delete scheduled error: {e}")
 
     return {"statusCode": 200, "body": ""}
+
+if __name__ == "__main__":
+    # Debug entry point - simulates EventBridge trigger
+    lambda_handler({"source": "aws.events", "detail-type": "Scheduled Event"}, None)
