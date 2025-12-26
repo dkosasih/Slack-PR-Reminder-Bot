@@ -154,13 +154,36 @@ def _top_up_all_channels():
         
         for original_ts, post_ats in groups.items():
             post_ats.sort()
-            while len(post_ats) < WINDOW_SIZE:
+            
+            # Calculate target: WINDOW_SIZE business days from now
+            now = time.time()
+            now_dt = datetime.fromtimestamp(now, tz=timezone.utc).astimezone(MEL_TZ)
+            target_dt = now_dt
+            days_added = 0
+            while days_added < WINDOW_SIZE:
+                target_dt += timedelta(days=1)
+                if target_dt.weekday() < 5:  # Mon-Fri only
+                    days_added += 1
+            target_timestamp = int(target_dt.timestamp())
+            
+            # Keep adding reminders until we have coverage through target date
+            while not post_ats or post_ats[-1] < target_timestamp:
                 base = post_ats[-1] if post_ats else _next_business_day_10am_mel_from_epoch(float(original_ts))
-                next_pa = _next_business_day_10am_after(base)
+                
+                # Determine next reminder time (alternating 10am and 3pm pattern)
+                base_dt = datetime.fromtimestamp(base, tz=timezone.utc).astimezone(MEL_TZ)
+                if base_dt.hour == 10:
+                    # Last was 10am, schedule 3pm same day
+                    next_pa = base + (5 * 60 * 60)
+                else:
+                    # Last was 3pm, schedule next business day 10am
+                    next_pa = _next_business_day_10am_after(base)
+                
                 try:
                     _schedule_nudge(channel, original_ts, next_pa, original_ts)
                     post_ats.append(next_pa)
-                    print(f"Scheduled reminder for thread {original_ts} in channel {channel}")
+                    next_dt = datetime.fromtimestamp(next_pa, tz=timezone.utc).astimezone(MEL_TZ)
+                    print(f"Scheduled reminder at {next_dt.strftime('%Y-%m-%d %H:%M')} for thread {original_ts}")
                 except SlackApiError as e:
                     print(f"top-up schedule failed for channel {channel}: {e}")
                     break
