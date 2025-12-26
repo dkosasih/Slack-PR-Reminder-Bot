@@ -9,7 +9,6 @@ SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 
 # Optional config
-CHANNEL_ID = os.environ.get("CHANNEL_ID")  # used by the daily top-up path
 WINDOW_SIZE = int(os.environ.get("WINDOW_SIZE", "2"))  # how many future reminders per PR thread
 MEL_TZ = ZoneInfo("Australia/Melbourne")
 
@@ -116,41 +115,55 @@ def _delete_scheduled_nudges_for_thread(channel: str, original_ts: str):
         if not cursor:
             break
 
-def _top_up_window_for_channel(channel: str):
+def _top_up_all_channels():
     """
-    Maintain a rolling window of WINDOW_SIZE future reminders for each PR thread,
-    identified by the marker [PR-NUDGE ts=<original_ts>].
+    Maintain a rolling window of WINDOW_SIZE future reminders for each PR thread
+    across all channels. Discovers channels dynamically from existing scheduled messages.
     """
-    if not channel:
-        return
-
-    groups: dict[str, list[int]] = {}  # original_ts -> list[post_at]
+    # Group scheduled messages by channel and thread
+    channel_groups: dict[str, dict[str, list[int]]] = {}  # channel -> {original_ts -> list[post_at]}
     cursor = None
+    
+    # List all scheduled messages (without channel filter to get all channels)
     while True:
-        resp = client.chat_scheduledMessages_list(channel=channel, limit=100, cursor=cursor)
+        resp = client.chat_scheduledMessages_list(limit=100, cursor=cursor)
         for item in resp.get("scheduled_messages", []):
             text = item.get("text", "") or ""
             m = MARKER_RE.search(text)
             if not m:
                 continue
+            
+            channel = item.get("channel")
             original_ts = m.group(1)
             post_at = int(item.get("post_at"))
-            groups.setdefault(original_ts, []).append(post_at)
+            
+            if channel:
+                if channel not in channel_groups:
+                    channel_groups[channel] = {}
+                channel_groups[channel].setdefault(original_ts, []).append(post_at)
+        
         cursor = (resp.get("response_metadata") or {}).get("next_cursor")
         if not cursor:
             break
-
-    for original_ts, post_ats in groups.items():
-        post_ats.sort()
-        while len(post_ats) < WINDOW_SIZE:
-            base = post_ats[-1] if post_ats else _next_business_day_10am_mel_from_epoch(float(original_ts))
-            next_pa = _next_business_day_10am_after(base)
-            try:
-                _schedule_nudge(channel, original_ts, next_pa, original_ts)
-                post_ats.append(next_pa)
-            except SlackApiError as e:
-                print(f"top-up schedule failed: {e}")
-                break
+    
+    print(f"Found PR reminders in {len(channel_groups)} channel(s)")
+    
+    # Top up each channel
+    for channel, groups in channel_groups.items():
+        print(f"Topping up channel {channel} with {len(groups)} PR thread(s)")
+        
+        for original_ts, post_ats in groups.items():
+            post_ats.sort()
+            while len(post_ats) < WINDOW_SIZE:
+                base = post_ats[-1] if post_ats else _next_business_day_10am_mel_from_epoch(float(original_ts))
+                next_pa = _next_business_day_10am_after(base)
+                try:
+                    _schedule_nudge(channel, original_ts, next_pa, original_ts)
+                    post_ats.append(next_pa)
+                    print(f"Scheduled reminder for thread {original_ts} in channel {channel}")
+                except SlackApiError as e:
+                    print(f"top-up schedule failed for channel {channel}: {e}")
+                    break
 
 def lambda_handler(event, context):
     print(f"Received event: {json.dumps(event)}")  # Debug logging
@@ -158,7 +171,7 @@ def lambda_handler(event, context):
     # EventBridge scheduled top-up branch
     if event.get("source") == "aws.events":
         try:
-            _top_up_window_for_channel(CHANNEL_ID)  # type: ignore[arg-type]
+            _top_up_all_channels()
         except SlackApiError as e:
             print(f"top-up error: {e}")
         return {"statusCode": 200, "body": ""}

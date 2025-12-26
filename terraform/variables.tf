@@ -34,11 +34,6 @@ variable "reminder_text" {
   default     = "Friendly nudge: no emoji reaction yet on this PR. React with 👀 if you're taking it; ✅ when approved; 🎉 when merged. Thanks!"
 }
 
-variable "channel_id" {
-  description = "Slack channel ID to maintain via scheduled top-ups"
-  type        = string
-}
-
 variable "window_size" {
   description = "Number of future reminders to keep per PR thread (rolling window)"
   type        = number

@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Check required environment variables
-required_vars=("SLACK_BOT_TOKEN" "SLACK_SIGNING_SECRET" "CHANNEL_ID")
+required_vars=("SLACK_BOT_TOKEN" "SLACK_SIGNING_SECRET")
 for var in "${required_vars[@]}"; do
   if [ -z "${!var}" ]; then
     echo "❌ Error: $var environment variable is not set"
@@ -26,7 +26,6 @@ cd "$SCRIPT_DIR/"
 # Set Terraform variables
 export TF_VAR_slack_bot_token="${SLACK_BOT_TOKEN}"
 export TF_VAR_slack_signing_secret="${SLACK_SIGNING_SECRET}"
-export TF_VAR_channel_id="${CHANNEL_ID}"
 export TF_VAR_aws_region="${AWS_REGION:-ap-southeast-2}"
 export TF_VAR_aws_profile="${AWS_PROFILE:-personal}"
 export TF_VAR_window_size="${WINDOW_SIZE:-2}"

@@ -75,7 +75,6 @@ resource "aws_lambda_function" "slack_events" {
       SLACK_BOT_TOKEN      = var.slack_bot_token
       SLACK_SIGNING_SECRET = var.slack_signing_secret
       REMINDER_TEXT        = var.reminder_text
-      CHANNEL_ID          = var.channel_id
       WINDOW_SIZE         = var.window_size
     }
   }
