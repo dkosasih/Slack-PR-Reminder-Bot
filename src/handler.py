@@ -15,6 +15,9 @@ MEL_TZ = ZoneInfo("Australia/Melbourne")
 # Slack client and patterns
 client = WebClient(token=SLACK_BOT_TOKEN)
 
+# In-memory event deduplication (survives for Lambda container lifetime)
+_processed_events = set()
+
 PR_RE = re.compile(r"https?://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
 MARKER_RE = re.compile(r"\[PR-NUDGE ts=([0-9]+\.[0-9]+)\]")
 MARKER_FMT = "[PR-NUDGE ts={}]"
@@ -210,6 +213,17 @@ def lambda_handler(event, context):
 
     payload = json.loads(body)
     print(f"Payload type: {payload.get('type')}, Event type: {payload.get('event', {}).get('type')}")  # Debug logging
+    
+    # Idempotency check - deduplicate retries using event_id
+    event_id = payload.get("event_id")
+    if event_id and event_id in _processed_events:
+        print(f"Event {event_id} already processed, skipping duplicate")
+        return {"statusCode": 200, "body": ""}
+    if event_id:
+        _processed_events.add(event_id)
+        # Keep only last 1000 event IDs to prevent unbounded memory growth
+        if len(_processed_events) > 100:
+            _processed_events.pop()
 
     # URL verification handshake
     if payload.get("type") == "url_verification":
@@ -226,10 +240,67 @@ def lambda_handler(event, context):
             message_ts = ev.get("ts")
             text = ev.get("text", "")
             user = ev.get("user")
+            thread_ts = ev.get("thread_ts")  # Present if this is a thread reply
             
-            print(f"app_mention event - Channel: {channel}, Text: {text}")  # Debug logging
+            print(f"app_mention event - Channel: {channel}, Text: {text}, Thread: {thread_ts}")  # Debug logging
             
-            # Extract PR URLs from text (works with both plain URLs and markdown links)
+            # Check if this is a thread reply requesting cancellation
+            if thread_ts and thread_ts != message_ts:
+                # This is a reply in a thread (not the parent message)
+                print(f"Detected thread reply, checking for cancellation request")
+                
+                # Check if message contains :approved: emoji
+                if ":approved:" in text or "approved" in text.lower():
+                    print(f"Found approval indicator, checking if parent has PR reminders")
+                    
+                    # Check if the parent message has scheduled reminders
+                    try:
+                        marker = MARKER_FMT.format(thread_ts)
+                        has_reminders = False
+                        
+                        # Quick check if this thread has any scheduled messages
+                        resp = client.chat_scheduledMessages_list(channel=channel, limit=100)
+                        for item in resp.get("scheduled_messages", []):
+                            if marker in (item.get("text") or ""):
+                                has_reminders = True
+                                break
+                        
+                        if has_reminders:
+                            print(f"Parent message has reminders, cancelling all scheduled messages")
+                            _delete_scheduled_nudges_for_thread(channel, thread_ts)
+                            
+                            # React to confirm cancellation
+                            client.reactions_add(
+                                channel=channel,
+                                timestamp=message_ts,
+                                name="white_check_mark"
+                            )
+                            print(f"Successfully cancelled reminders for thread {thread_ts}")
+                            return {"statusCode": 200, "body": ""}
+                        else:
+                            print(f"No reminders found for thread {thread_ts}")
+                            # React with question mark - no reminders to cancel
+                            client.reactions_add(
+                                channel=channel,
+                                timestamp=message_ts,
+                                name="question"
+                            )
+                            return {"statusCode": 200, "body": ""}
+                    
+                    except SlackApiError as e:
+                        print(f"Error checking/cancelling reminders: {e}")
+                        # React with X to indicate error
+                        try:
+                            client.reactions_add(
+                                channel=channel,
+                                timestamp=message_ts,
+                                name="x"
+                            )
+                        except:
+                            pass
+                        return {"statusCode": 200, "body": ""}
+            
+            # Original logic: Extract PR URLs from text (works with both plain URLs and markdown links)
             pr_match = PR_RE.search(text)
             
             if pr_match and channel and message_ts:
