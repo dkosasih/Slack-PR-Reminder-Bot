@@ -31,7 +31,7 @@ variable "slack_signing_secret" {
 variable "reminder_text" {
   description = "Text posted as the reminder in the PR thread"
   type        = string
-  default     = "Friendly nudge: no emoji reaction yet on this PR. React with 👀 if you're taking it; ✅ when approved; 🎉 when merged. Thanks!"
+  default     = "no emoji reaction yet on this PR. React with 👀 if you’re taking it; mention me in the thread with :approved: emoji when approved. Thanks!"
 }
 
 variable "window_size" {
