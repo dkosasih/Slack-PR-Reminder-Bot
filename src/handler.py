@@ -285,7 +285,28 @@ def lambda_handler(event, context):
                             return {"statusCode": 200, "body": ""}
                         else:
                             print(f"No reminders found for thread {thread_ts}")
-                            # React with question mark - no reminders to cancel
+                            # Before adding ?, check if ✅ already exists (might be a retry after successful cancel)
+                            try:
+                                client.reactions_add(
+                                    channel=channel,
+                                    timestamp=message_ts,
+                                    name="white_check_mark"
+                                )
+                                # If we successfully added ✅, it means first invocation didn't complete
+                                # But also means there were no reminders, so remove ✅ and add ?
+                                client.reactions_remove(
+                                    channel=channel,
+                                    timestamp=message_ts,
+                                    name="white_check_mark"
+                                )
+                            except SlackApiError as reaction_err:
+                                if reaction_err.response.get("error") == "already_reacted":
+                                    # ✅ already exists - this is a retry after successful cancellation
+                                    print(f"Already processed successfully (✅ exists), skipping ❓")
+                                    return {"statusCode": 200, "body": ""}
+                                # Other errors, continue to add ?
+                            
+                            # Genuinely no reminders found - react with question mark
                             try:
                                 client.reactions_add(
                                     channel=channel,
