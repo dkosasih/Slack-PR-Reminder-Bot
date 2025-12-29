@@ -44,9 +44,6 @@ def _verify_slack_signature(headers, body: str) -> bool:
     ).hexdigest()
     return hmac.compare_digest(my_sig, signature)
 
-def _is_pr_links(links: list[dict]) -> bool:
-    return any(PR_RE.search(l.get("url", "")) for l in links)
-
 def _next_business_day_10am_mel_from_epoch(epoch_utc: float) -> int:
     utc_dt = datetime.fromtimestamp(epoch_utc, tz=timezone.utc)
     local = utc_dt.astimezone(MEL_TZ)
@@ -190,6 +187,39 @@ def _top_up_all_channels():
                 except SlackApiError as e:
                     print(f"top-up schedule failed for channel {channel}: {e}")
                     break
+                
+def _is_already_reacted(text: str) -> bool:
+    return text == "already_reacted"
+    
+def _is_check_mark_reacted(channel, message_ts) -> bool:
+    # Before adding ?, check if ✅ already exists (might be a retry after successful cancel)
+    if _add_check_mark(channel, message_ts):
+        # If we successfully added ✅, it means first invocation didn't complete
+        # But also means there were no reminders, so remove ✅ and add ?
+        client.reactions_remove(
+            channel=channel,
+            timestamp=message_ts,
+            name="white_check_mark"
+        )
+        return False
+    
+    return True
+
+def _add_check_mark(channel, message_ts) -> bool:
+    # React to confirm cancellation
+    try:
+        client.reactions_add(
+            channel=channel,
+            timestamp=message_ts,
+            name="white_check_mark"
+        )
+    except SlackApiError as reaction_err:
+        if _is_already_reacted(reaction_err.response.get("error")):
+            print(f"Already processed (reaction exists), skipping")
+            return False
+        else:
+            raise
+    return True
 
 def lambda_handler(event, context):
     print(f"Received event: {json.dumps(event)}")  # Debug logging
@@ -239,7 +269,6 @@ def lambda_handler(event, context):
             channel = ev.get("channel")
             message_ts = ev.get("ts")
             text = ev.get("text", "")
-            user = ev.get("user")
             thread_ts = ev.get("thread_ts")  # Present if this is a thread reply
             
             print(f"app_mention event - Channel: {channel}, Text: {text}, Thread: {thread_ts}")  # Debug logging
@@ -270,41 +299,15 @@ def lambda_handler(event, context):
                             _delete_scheduled_nudges_for_thread(channel, thread_ts)
                             
                             # React to confirm cancellation
-                            try:
-                                client.reactions_add(
-                                    channel=channel,
-                                    timestamp=message_ts,
-                                    name="white_check_mark"
-                                )
-                            except SlackApiError as reaction_err:
-                                if reaction_err.response.get("error") == "already_reacted":
-                                    print(f"Already processed (reaction exists), skipping")
-                                else:
-                                    raise
+                            _add_check_mark(channel, message_ts)
                             print(f"Successfully cancelled reminders for thread {thread_ts}")
                             return {"statusCode": 200, "body": ""}
                         else:
                             print(f"No reminders found for thread {thread_ts}")
-                            # Before adding ?, check if ✅ already exists (might be a retry after successful cancel)
-                            try:
-                                client.reactions_add(
-                                    channel=channel,
-                                    timestamp=message_ts,
-                                    name="white_check_mark"
-                                )
-                                # If we successfully added ✅, it means first invocation didn't complete
-                                # But also means there were no reminders, so remove ✅ and add ?
-                                client.reactions_remove(
-                                    channel=channel,
-                                    timestamp=message_ts,
-                                    name="white_check_mark"
-                                )
-                            except SlackApiError as reaction_err:
-                                if reaction_err.response.get("error") == "already_reacted":
-                                    # ✅ already exists - this is a retry after successful cancellation
-                                    print(f"Already processed successfully (✅ exists), skipping ❓")
-                                    return {"statusCode": 200, "body": ""}
-                                # Other errors, continue to add ?
+                            
+                            if(_is_check_mark_reacted(channel, message_ts)):
+                                print(f"Already processed successfully (✅ exists), skipping ❓")
+                                return {"statusCode": 200, "body": ""}
                             
                             # Genuinely no reminders found - react with question mark
                             try:
@@ -314,7 +317,7 @@ def lambda_handler(event, context):
                                     name="question"
                                 )
                             except SlackApiError as reaction_err:
-                                if reaction_err.response.get("error") == "already_reacted":
+                                if _is_already_reacted(reaction_err.response.get("error")):
                                     print(f"Already processed (reaction exists), skipping")
                                 else:
                                     raise
@@ -323,7 +326,7 @@ def lambda_handler(event, context):
                     except SlackApiError as e:
                         print(f"Error checking/cancelling reminders: {e}")
                         # React with X to indicate error (unless already reacted)
-                        if e.response.get("error") != "already_reacted":
+                        if _is_already_reacted(e.response.get("error")):
                             try:
                                 client.reactions_add(
                                     channel=channel,
@@ -343,18 +346,7 @@ def lambda_handler(event, context):
                 
                 try:
                     # React to confirm we received it
-                    try:
-                        client.reactions_add(
-                            channel=channel,
-                            timestamp=message_ts,
-                            name="white_check_mark"
-                        )
-                    except SlackApiError as reaction_err:
-                        if reaction_err.response.get("error") == "already_reacted":
-                            print(f"Already processed this PR message, skipping")
-                            return {"statusCode": 200, "body": ""}
-                        else:
-                            raise
+                    _add_check_mark(channel, message_ts)
                     
                     # Schedule reminders for this message
                     base_ts = float(message_ts)
@@ -380,7 +372,7 @@ def lambda_handler(event, context):
                     
                 except SlackApiError as e:
                     # If already_reacted, it means we already processed this (retry/duplicate)
-                    if e.response.get("error") == "already_reacted":
+                    if _is_already_reacted(e.response.get("error")):
                         print(f"Already processed this message (already_reacted), skipping")
                         return {"statusCode": 200, "body": ""}
                     
@@ -404,11 +396,10 @@ def lambda_handler(event, context):
                         name="question"
                     )
                 except SlackApiError as e:
-                    if e.response.get("error") == "already_reacted":
+                    if _is_already_reacted(e.response.get("error")):
                         print(f"Already processed (reaction exists), skipping")
                     # Silently ignore other reaction errors
                 except:
-                    pass
                     pass
 
         # Cancel pending reminders on :approved: reaction
