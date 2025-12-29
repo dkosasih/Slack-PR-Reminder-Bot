@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "aws_profile" {
   description = "AWS profile to use for deployment (optional, uses default credentials chain if not set)"
   type        = string
-  default     = ""
+  default     = "personal"
 }
 
 variable "function_name" {
@@ -35,9 +35,27 @@ variable "reminder_text" {
 }
 
 variable "window_size" {
-  description = "Number of future reminders to keep per PR thread (rolling window)"
+  description = "Number of business days to maintain reminders for each PR (rolling window)"
   type        = number
   default     = 2
+}
+
+variable "reminder_interval_hours" {
+  description = "Hours between reminders during business hours"
+  type        = number
+  default     = 3
+}
+
+variable "business_hours_start" {
+  description = "Start of business hours (hour in 24-hour format)"
+  type        = number
+  default     = 9
+}
+
+variable "business_hours_end" {
+  description = "End of business hours (hour in 24-hour format)"
+  type        = number
+  default     = 17
 }
 
 variable "schedule_expression" {

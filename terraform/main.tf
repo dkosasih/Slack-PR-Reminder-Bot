@@ -72,10 +72,13 @@ resource "aws_lambda_function" "slack_events" {
 
   environment {
     variables = {
-      SLACK_BOT_TOKEN      = var.slack_bot_token
-      SLACK_SIGNING_SECRET = var.slack_signing_secret
-      REMINDER_TEXT        = var.reminder_text
-      WINDOW_SIZE         = var.window_size
+      SLACK_BOT_TOKEN          = var.slack_bot_token
+      SLACK_SIGNING_SECRET     = var.slack_signing_secret
+      REMINDER_TEXT            = var.reminder_text
+      WINDOW_SIZE              = var.window_size
+      REMINDER_INTERVAL_HOURS  = var.reminder_interval_hours
+      BUSINESS_HOURS_START     = var.business_hours_start
+      BUSINESS_HOURS_END       = var.business_hours_end
     }
   }
 

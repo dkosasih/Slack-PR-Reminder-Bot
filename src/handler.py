@@ -9,7 +9,10 @@ SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 
 # Optional config
-WINDOW_SIZE = int(os.environ.get("WINDOW_SIZE", "2"))  # how many future reminders per PR thread
+WINDOW_SIZE = int(os.environ.get("WINDOW_SIZE", "2"))  # how many business days to maintain reminders
+REMINDER_INTERVAL_HOURS = int(os.environ.get("REMINDER_INTERVAL_HOURS", "3"))  # hours between reminders during business hours
+BUSINESS_HOURS_START = int(os.environ.get("BUSINESS_HOURS_START", "9"))  # 9am
+BUSINESS_HOURS_END = int(os.environ.get("BUSINESS_HOURS_END", "17"))  # 5pm
 MEL_TZ = ZoneInfo("Australia/Melbourne")
 
 # Slack client and patterns
@@ -43,6 +46,83 @@ def _verify_slack_signature(headers, body: str) -> bool:
         hashlib.sha256
     ).hexdigest()
     return hmac.compare_digest(my_sig, signature)
+
+def _is_within_business_hours(dt_local: datetime) -> bool:
+    """Check if a datetime is within business hours (Mon-Fri, 9am-5pm Melbourne time)"""
+    if dt_local.weekday() >= 5:  # Weekend
+        return False
+    hour = dt_local.hour
+    return BUSINESS_HOURS_START <= hour < BUSINESS_HOURS_END
+
+def _next_reminder_in_business_hours(from_epoch: float, interval_hours: int) -> int:
+    """
+    Calculate the next reminder time by adding interval_hours to from_epoch,
+    rolling to next business day at BUSINESS_HOURS_START if outside business hours or on weekend.
+    
+    Args:
+        from_epoch: Starting timestamp (UTC epoch)
+        interval_hours: Hours to add
+    
+    Returns:
+        Next valid reminder timestamp (UTC epoch)
+    """
+    from_dt_utc = datetime.fromtimestamp(from_epoch, tz=timezone.utc)
+    from_dt_local = from_dt_utc.astimezone(MEL_TZ)
+    
+    # Add the interval
+    target_dt_local = from_dt_local + timedelta(hours=interval_hours)
+    
+    # If target falls outside business hours or on weekend, roll to next business day start
+    while not _is_within_business_hours(target_dt_local):
+        # If past end of business hours or on weekend, move to next day at start hour
+        if target_dt_local.weekday() >= 5 or target_dt_local.hour >= BUSINESS_HOURS_END:
+            # Move to next day
+            target_dt_local = (target_dt_local + timedelta(days=1)).replace(
+                hour=BUSINESS_HOURS_START, minute=0, second=0, microsecond=0
+            )
+        elif target_dt_local.hour < BUSINESS_HOURS_START:
+            # Before business hours, move to start of business hours same day
+            target_dt_local = target_dt_local.replace(
+                hour=BUSINESS_HOURS_START, minute=0, second=0, microsecond=0
+            )
+        else:
+            # Should not reach here, but break just in case
+            break
+    
+    return int(target_dt_local.astimezone(timezone.utc).timestamp())
+
+def _next_business_hour_slot_from_epoch(epoch_utc: float) -> int:
+    """
+    Find the next available business hour slot from a given epoch.
+    If within business hours, returns the next interval slot.
+    If outside business hours, returns next business day at BUSINESS_HOURS_START.
+    
+    Args:
+        epoch_utc: Starting timestamp (UTC epoch)
+    
+    Returns:
+        Next business hour slot timestamp (UTC epoch)
+    """
+    utc_dt = datetime.fromtimestamp(epoch_utc, tz=timezone.utc)
+    local = utc_dt.astimezone(MEL_TZ)
+    
+    # If within business hours on a weekday, calculate next interval slot
+    if _is_within_business_hours(local):
+        return _next_reminder_in_business_hours(epoch_utc, REMINDER_INTERVAL_HOURS)
+    
+    # Outside business hours or weekend - find next business day start
+    target = local.replace(hour=BUSINESS_HOURS_START, minute=0, second=0, microsecond=0)
+    
+    # If before business hours today and it's a weekday, use today
+    if local.weekday() < 5 and local.hour < BUSINESS_HOURS_START:
+        return int(target.astimezone(timezone.utc).timestamp())
+    
+    # Otherwise move to next business day
+    target += timedelta(days=1)
+    while target.weekday() >= 5:  # Skip weekends
+        target += timedelta(days=1)
+    
+    return int(target.astimezone(timezone.utc).timestamp())
 
 def _next_business_day_10am_mel_from_epoch(epoch_utc: float) -> int:
     utc_dt = datetime.fromtimestamp(epoch_utc, tz=timezone.utc)
@@ -168,16 +248,14 @@ def _top_up_all_channels():
             
             # Keep adding reminders until we have coverage through target date
             while not post_ats or post_ats[-1] < target_timestamp:
-                base = post_ats[-1] if post_ats else _next_business_day_10am_mel_from_epoch(float(original_ts))
-                
-                # Determine next reminder time (alternating 10am and 3pm pattern)
-                base_dt = datetime.fromtimestamp(base, tz=timezone.utc).astimezone(MEL_TZ)
-                if base_dt.hour == 10:
-                    # Last was 10am, schedule 3pm same day
-                    next_pa = base + (5 * 60 * 60)
+                # Get the base time (last scheduled or first business hour slot from original message)
+                if post_ats:
+                    base = post_ats[-1]
                 else:
-                    # Last was 3pm, schedule next business day 10am
-                    next_pa = _next_business_day_10am_after(base)
+                    base = _next_business_hour_slot_from_epoch(float(original_ts))
+                
+                # Calculate next reminder time using interval
+                next_pa = _next_reminder_in_business_hours(base, REMINDER_INTERVAL_HOURS)
                 
                 try:
                     _schedule_nudge(channel, original_ts, next_pa, original_ts)
@@ -348,27 +426,32 @@ def lambda_handler(event, context):
                     # React to confirm we received it
                     _add_check_mark(channel, message_ts)
                     
-                    # Schedule reminders for this message
+                    # Schedule reminders for this message using interval-based logic
                     base_ts = float(message_ts)
                     existing_times = _get_existing_scheduled_times_for_thread(channel, message_ts)
                     
-                    first = _next_business_day_10am_mel_from_epoch(base_ts)
-                    _schedule_nudge_if_not_exists(channel, message_ts, first, message_ts, existing_times)
+                    # Find first reminder slot (next available business hour)
+                    cursor_time = _next_business_hour_slot_from_epoch(base_ts)
                     
-                    # Add 5 more hours from first
-                    first_plus_5h = first + (5 * 60 * 60)
-                    _schedule_nudge_if_not_exists(channel, message_ts, first_plus_5h, message_ts, existing_times)
+                    # Calculate target end date: WINDOW_SIZE business days from now
+                    now = time.time()
+                    now_dt = datetime.fromtimestamp(now, tz=timezone.utc).astimezone(MEL_TZ)
+                    target_dt = now_dt
+                    days_added = 0
+                    while days_added < WINDOW_SIZE:
+                        target_dt += timedelta(days=1)
+                        if target_dt.weekday() < 5:  # Mon-Fri only
+                            days_added += 1
+                    target_timestamp = int(target_dt.replace(hour=BUSINESS_HOURS_END, minute=0, second=0, microsecond=0).timestamp())
                     
-                    cursor_pa = first
-                    for _ in range(WINDOW_SIZE - 1):
-                        cursor_pa = _next_business_day_10am_after(cursor_pa)
-                        _schedule_nudge_if_not_exists(channel, message_ts, cursor_pa, message_ts, existing_times)
-                        
-                        # Add 5 more hours from each subsequent day
-                        cursor_pa_plus_5h = cursor_pa + (5 * 60 * 60)
-                        _schedule_nudge_if_not_exists(channel, message_ts, cursor_pa_plus_5h, message_ts, existing_times)
+                    # Schedule reminders at interval until we reach target
+                    reminder_count = 0
+                    while cursor_time <= target_timestamp:
+                        if _schedule_nudge_if_not_exists(channel, message_ts, cursor_time, message_ts, existing_times):
+                            reminder_count += 1
+                        cursor_time = _next_reminder_in_business_hours(cursor_time, REMINDER_INTERVAL_HOURS)
                     
-                    print(f"Scheduled reminders for PR: {pr_url}")
+                    print(f"Scheduled {reminder_count} reminders for PR: {pr_url}")
                     
                 except SlackApiError as e:
                     # If already_reacted, it means we already processed this (retry/duplicate)
