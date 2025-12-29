@@ -368,13 +368,13 @@ def lambda_handler(event, context):
                     
                     # Check if the parent message has scheduled reminders
                     try:
-                        marker = MARKER_FMT.format(thread_ts)
+                        marker_prefix = f"[PR-NUDGE ts={thread_ts}"
                         has_reminders = False
                         
                         # Quick check if this thread has any scheduled messages
                         resp = client.chat_scheduledMessages_list(channel=channel, limit=100)
                         for item in resp.get("scheduled_messages", []):
-                            if marker in (item.get("text") or ""):
+                            if marker_prefix in (item.get("text") or ""):
                                 has_reminders = True
                                 break
                         
