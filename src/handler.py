@@ -22,8 +22,8 @@ client = WebClient(token=SLACK_BOT_TOKEN)
 _processed_events = set()
 
 PR_RE = re.compile(r"https?://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
-MARKER_RE = re.compile(r"\[PR-NUDGE ts=([0-9]+\.[0-9]+)\]")
-MARKER_FMT = "[PR-NUDGE ts={}]"
+MARKER_RE = re.compile(r"\[PR-NUDGE ts=([0-9]+\.[0-9]+) url=(.+?)\]")
+MARKER_FMT = "[PR-NUDGE ts={} url={}]"
 
 REMINDER_TEXT = os.environ.get(
     "REMINDER_TEXT",
@@ -141,11 +141,13 @@ def _next_business_day_10am_after(post_at_epoch_utc: int) -> int:
         target += timedelta(days=1)
     return int(target.astimezone(timezone.utc).timestamp())
 
-def _schedule_nudge(channel: str, thread_ts: str, post_at: int, original_ts: str):
-    marker = MARKER_FMT.format(original_ts)
+def _schedule_nudge(channel: str, thread_ts: str, post_at: int, original_ts: str, pr_url: str = ""):
+    marker = MARKER_FMT.format(original_ts, pr_url)
+    # Replace "this PR" with a link to the PR
+    reminder_text = REMINDER_TEXT.replace("this PR", f"<{pr_url}|this PR>") if pr_url else REMINDER_TEXT
     client.chat_scheduleMessage(
         channel=channel,
-        text=f"{marker} {REMINDER_TEXT}",
+        text=f"{marker} {reminder_text}",
         post_at=post_at,
         thread_ts=thread_ts,
         reply_broadcast=True
@@ -154,13 +156,13 @@ def _schedule_nudge(channel: str, thread_ts: str, post_at: int, original_ts: str
 def _get_existing_scheduled_times_for_thread(channel: str, original_ts: str) -> set[int]:
     """Get all existing scheduled times for a specific PR thread"""
     existing_times = set()
-    marker = MARKER_FMT.format(original_ts)
+    marker_prefix = f"[PR-NUDGE ts={original_ts}"
     cursor = None
     
     while True:
         resp = client.chat_scheduledMessages_list(channel=channel, limit=100, cursor=cursor)
         for item in resp.get("scheduled_messages", []):
-            if marker in (item.get("text") or ""):
+            if marker_prefix in (item.get("text") or ""):
                 existing_times.add(int(item.get("post_at")))
         cursor = (resp.get("response_metadata") or {}).get("next_cursor")
         if not cursor:
@@ -168,10 +170,10 @@ def _get_existing_scheduled_times_for_thread(channel: str, original_ts: str) -> 
     
     return existing_times
 
-def _schedule_nudge_if_not_exists(channel: str, thread_ts: str, post_at: int, original_ts: str, existing_times: set[int]) -> bool:
+def _schedule_nudge_if_not_exists(channel: str, thread_ts: str, post_at: int, original_ts: str, existing_times: set[int], pr_url: str = "") -> bool:
     """Schedule a nudge only if no message is already scheduled for that time"""
     if post_at not in existing_times:
-        _schedule_nudge(channel, thread_ts, post_at, original_ts)
+        _schedule_nudge(channel, thread_ts, post_at, original_ts, pr_url)
         existing_times.add(post_at)  # Update the set to prevent future duplicates in same batch
         return True
     return False
@@ -179,11 +181,12 @@ def _schedule_nudge_if_not_exists(channel: str, thread_ts: str, post_at: int, or
 def _delete_scheduled_nudges_for_thread(channel: str, original_ts: str):
     # Cancel all scheduled messages for this PR thread by matching the marker
     cursor = None
-    marker = MARKER_FMT.format(original_ts)
+    # Use partial marker match since URL might vary
+    marker_prefix = f"[PR-NUDGE ts={original_ts}"
     while True:
         resp = client.chat_scheduledMessages_list(channel=channel, limit=100, cursor=cursor)
         for item in resp.get("scheduled_messages", []):
-            if marker in (item.get("text") or ""):
+            if marker_prefix in (item.get("text") or ""):
                 try:
                     client.chat_deleteScheduledMessage(
                         channel=channel,
@@ -201,7 +204,7 @@ def _top_up_all_channels():
     across all channels. Discovers channels dynamically from existing scheduled messages.
     """
     # Group scheduled messages by channel and thread
-    channel_groups: dict[str, dict[str, list[int]]] = {}  # channel -> {original_ts -> list[post_at]}
+    channel_groups: dict[str, dict[str, tuple[list[int], str]]] = {}  # channel -> {original_ts -> (list[post_at], pr_url)}
     cursor = None
     
     # List all scheduled messages (without channel filter to get all channels)
@@ -215,12 +218,15 @@ def _top_up_all_channels():
             
             channel = item.get("channel")
             original_ts = m.group(1)
+            pr_url = m.group(2)
             post_at = int(item.get("post_at"))
             
             if channel:
                 if channel not in channel_groups:
                     channel_groups[channel] = {}
-                channel_groups[channel].setdefault(original_ts, []).append(post_at)
+                if original_ts not in channel_groups[channel]:
+                    channel_groups[channel][original_ts] = ([], pr_url)
+                channel_groups[channel][original_ts][0].append(post_at)
         
         cursor = (resp.get("response_metadata") or {}).get("next_cursor")
         if not cursor:
@@ -232,7 +238,7 @@ def _top_up_all_channels():
     for channel, groups in channel_groups.items():
         print(f"Topping up channel {channel} with {len(groups)} PR thread(s)")
         
-        for original_ts, post_ats in groups.items():
+        for original_ts, (post_ats, pr_url) in groups.items():
             post_ats.sort()
             
             # Calculate target: WINDOW_SIZE business days from now
@@ -258,7 +264,7 @@ def _top_up_all_channels():
                 next_pa = _next_reminder_in_business_hours(base, REMINDER_INTERVAL_HOURS)
                 
                 try:
-                    _schedule_nudge(channel, original_ts, next_pa, original_ts)
+                    _schedule_nudge(channel, original_ts, next_pa, original_ts, pr_url)
                     post_ats.append(next_pa)
                     next_dt = datetime.fromtimestamp(next_pa, tz=timezone.utc).astimezone(MEL_TZ)
                     print(f"Scheduled reminder at {next_dt.strftime('%Y-%m-%d %H:%M')} for thread {original_ts}")
@@ -447,7 +453,7 @@ def lambda_handler(event, context):
                     # Schedule reminders at interval until we reach target
                     reminder_count = 0
                     while cursor_time <= target_timestamp:
-                        if _schedule_nudge_if_not_exists(channel, message_ts, cursor_time, message_ts, existing_times):
+                        if _schedule_nudge_if_not_exists(channel, message_ts, cursor_time, message_ts, existing_times, pr_url):
                             reminder_count += 1
                         cursor_time = _next_reminder_in_business_hours(cursor_time, REMINDER_INTERVAL_HOURS)
                     
