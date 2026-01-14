@@ -22,7 +22,7 @@ client = WebClient(token=SLACK_BOT_TOKEN)
 _processed_events = set()
 
 PR_RE = re.compile(r"https?://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
-MARKER_RE = re.compile(r"\[PR-NUDGE ts=([0-9]+\.[0-9]+) url=(.+?)\]")
+MARKER_RE = re.compile(r"\[PR-NUDGE ts=([0-9]+\.[0-9]+) url=<?(.+?)>?\]")
 MARKER_FMT = "[PR-NUDGE ts={} url={}]"
 
 REMINDER_TEXT = os.environ.get(
@@ -250,7 +250,8 @@ def _top_up_all_channels():
                 target_dt += timedelta(days=1)
                 if target_dt.weekday() < 5:  # Mon-Fri only
                     days_added += 1
-            target_timestamp = int(target_dt.timestamp())
+            # Set target to end of business hours on the target day
+            target_timestamp = int(target_dt.replace(hour=BUSINESS_HOURS_END, minute=0, second=0, microsecond=0).timestamp())
             
             # Keep adding reminders until we have coverage through target date
             while not post_ats or post_ats[-1] < target_timestamp:
