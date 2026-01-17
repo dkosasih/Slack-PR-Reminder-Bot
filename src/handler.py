@@ -264,6 +264,10 @@ def _top_up_all_channels():
                 # Calculate next reminder time using interval
                 next_pa = _next_reminder_in_business_hours(base, REMINDER_INTERVAL_HOURS)
                 
+                # Stop if next reminder exceeds target (don't schedule beyond window)
+                if next_pa > target_timestamp:
+                    break
+                
                 try:
                     _schedule_nudge(channel, original_ts, next_pa, original_ts, pr_url)
                     post_ats.append(next_pa)
