@@ -8,8 +8,7 @@ from scheduling import (
     is_within_business_hours,
     next_reminder_in_business_hours,
     next_business_hour_slot_from_epoch,
-    calculate_initial_schedule,
-    calculate_topup_schedule
+    calculate_initial_schedule
 )
 
 # Required env vars
