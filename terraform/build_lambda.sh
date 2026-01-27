@@ -16,6 +16,7 @@ mkdir -p "$BUILD_DIR"
 
 # Copy source files
 cp "$SCRIPT_DIR/../src/handler.py" "$BUILD_DIR/"
+cp "$SCRIPT_DIR/../src/scheduling.py" "$BUILD_DIR/"
 cp "$SCRIPT_DIR/../src/requirements.txt" "$BUILD_DIR/"
 
 # Install dependencies
