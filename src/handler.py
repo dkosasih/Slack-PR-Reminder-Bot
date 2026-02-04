@@ -379,12 +379,23 @@ def lambda_handler(event, context):
                         return {"statusCode": 200, "body": ""}
                     
                     # Schedule reminders for this message using interval-based logic
+                    # If message was edited and the original timestamp is too old, use current time as base
+                    now = time.time()
+                    edited_info = ev.get("edited")
                     base_ts = float(message_ts)
+                    
+                    # Check if message was edited and if original timestamp would cause past scheduling
+                    if edited_info:
+                        print(f"Message was edited at {edited_info.get('ts')}. Checking if original timestamp is usable.")
+                        # If the message timestamp is more than 1 hour old, use current time instead
+                        if now - base_ts > 3600:  # 1 hour
+                            print(f"Original message timestamp is too old ({base_ts}), using current time ({now}) as base for scheduling")
+                            base_ts = now
+                    
                     existing_times = _get_existing_scheduled_times_for_thread(channel, message_ts)
                     
                     # Find first reminder slot (next available business hour)
                     # Use the scheduling module to calculate proper 2-day window
-                    now = time.time()
                     schedule_times = calculate_initial_schedule(base_ts, now, SCHEDULING_CONFIG)
                     
                     # Schedule all calculated reminders
