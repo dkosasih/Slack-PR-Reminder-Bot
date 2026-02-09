@@ -368,6 +368,20 @@ def lambda_handler(event, context):
             # Original logic: Extract PR URLs from text (works with both plain URLs and markdown links)
             pr_match = PR_RE.search(text)
             
+            # Reject PR links posted in threads (not as parent message)
+            if pr_match and thread_ts and thread_ts != message_ts:
+                print(f"PR link found in thread reply - rejecting. PR reminders must be created on parent messages, not in threads.")
+                try:
+                    client.reactions_add(
+                        channel=channel,
+                        timestamp=message_ts,
+                        name="x"
+                    )
+                except SlackApiError as e:
+                    if not _is_already_reacted(e.response.get("error")):
+                        print(f"Failed to add :x: reaction: {e}")
+                return {"statusCode": 200, "body": ""}
+            
             if pr_match and channel and message_ts:
                 pr_url = pr_match.group(0)
                 print(f"Found PR URL: {pr_url}")

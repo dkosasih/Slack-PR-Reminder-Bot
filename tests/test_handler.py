@@ -238,6 +238,152 @@ class TestEditedMessageHandling:
         assert len(x_reaction_calls) == 0, "Should not add :x: reaction for edited message"
 
 
+class TestThreadPRRejection:
+    """Tests for rejecting PR links posted in threads"""
+    
+    def test_pr_link_in_thread_reply_rejected(self, mock_slack_client):
+        """PR link posted in thread reply should be rejected with :x:"""
+        import handler
+        
+        now = time.time()
+        parent_ts = str(now - 100)  # Parent message was 100 seconds ago
+        thread_ts = str(now)  # Reply in thread
+        
+        event = {
+            "body": json.dumps({
+                "type": "event_callback",
+                "event_id": "test-event-thread-1",
+                "event": {
+                    "type": "app_mention",
+                    "channel": "C123456",
+                    "ts": thread_ts,
+                    "thread_ts": parent_ts,  # This is a thread reply
+                    "text": "<@BOTID> Please review <https://github.com/test/repo/pull/123>"
+                }
+            }),
+            "headers": {
+                "x-slack-request-timestamp": str(int(now)),
+                "x-slack-signature": "v0=test"
+            }
+        }
+        
+        mock_slack_client.reactions_add.return_value = {"ok": True}
+        
+        with patch('handler._verify_slack_signature', return_value=True):
+            result = handler.lambda_handler(event, None)
+        
+        # Should return 200
+        assert result['statusCode'] == 200
+        
+        # Should NOT try to schedule any messages
+        assert not mock_slack_client.chat_scheduleMessage.called, \
+            "Should not schedule messages for PR links in threads"
+        
+        # Should add :x: reaction
+        x_reaction_calls = [
+            call for call in mock_slack_client.reactions_add.call_args_list
+            if call[1].get('name') == 'x'
+        ]
+        assert len(x_reaction_calls) == 1, "Should add :x: reaction to reject thread PR"
+        assert x_reaction_calls[0][1]['timestamp'] == thread_ts
+    
+    def test_pr_link_in_parent_message_accepted(self, mock_slack_client):
+        """PR link in parent message (not in thread) should be accepted"""
+        import handler
+        
+        now = time.time()
+        message_ts = str(now)
+        
+        event = {
+            "body": json.dumps({
+                "type": "event_callback",
+                "event_id": "test-event-parent-1",
+                "event": {
+                    "type": "app_mention",
+                    "channel": "C123456",
+                    "ts": message_ts,
+                    # No thread_ts - this is a parent message
+                    "text": "<@BOTID> Please review <https://github.com/test/repo/pull/123>"
+                }
+            }),
+            "headers": {
+                "x-slack-request-timestamp": str(int(now)),
+                "x-slack-signature": "v0=test"
+            }
+        }
+        
+        mock_slack_client.reactions_add.return_value = {"ok": True}
+        mock_slack_client.chat_scheduledMessages_list.return_value = {
+            "scheduled_messages": []
+        }
+        mock_slack_client.chat_scheduleMessage.return_value = {"ok": True}
+        
+        with patch('handler._verify_slack_signature', return_value=True):
+            result = handler.lambda_handler(event, None)
+        
+        # Should return 200
+        assert result['statusCode'] == 200
+        
+        # Should try to schedule messages
+        assert mock_slack_client.chat_scheduleMessage.called, \
+            "Should schedule messages for PR links in parent messages"
+        
+        # Should NOT add :x: reaction
+        x_reaction_calls = [
+            call for call in mock_slack_client.reactions_add.call_args_list
+            if call[1].get('name') == 'x'
+        ]
+        assert len(x_reaction_calls) == 0, "Should not add :x: reaction for valid parent message"
+    
+    def test_pr_link_when_thread_ts_equals_message_ts_accepted(self, mock_slack_client):
+        """PR link where thread_ts == message_ts (parent of a thread) should be accepted"""
+        import handler
+        
+        now = time.time()
+        message_ts = str(now)
+        
+        event = {
+            "body": json.dumps({
+                "type": "event_callback",
+                "event_id": "test-event-parent-thread-1",
+                "event": {
+                    "type": "app_mention",
+                    "channel": "C123456",
+                    "ts": message_ts,
+                    "thread_ts": message_ts,  # thread_ts == ts means this is the parent
+                    "text": "<@BOTID> Please review <https://github.com/test/repo/pull/123>"
+                }
+            }),
+            "headers": {
+                "x-slack-request-timestamp": str(int(now)),
+                "x-slack-signature": "v0=test"
+            }
+        }
+        
+        mock_slack_client.reactions_add.return_value = {"ok": True}
+        mock_slack_client.chat_scheduledMessages_list.return_value = {
+            "scheduled_messages": []
+        }
+        mock_slack_client.chat_scheduleMessage.return_value = {"ok": True}
+        
+        with patch('handler._verify_slack_signature', return_value=True):
+            result = handler.lambda_handler(event, None)
+        
+        # Should return 200
+        assert result['statusCode'] == 200
+        
+        # Should try to schedule messages
+        assert mock_slack_client.chat_scheduleMessage.called, \
+            "Should schedule messages when thread_ts == message_ts (parent message)"
+        
+        # Should NOT add :x: reaction
+        x_reaction_calls = [
+            call for call in mock_slack_client.reactions_add.call_args_list
+            if call[1].get('name') == 'x'
+        ]
+        assert len(x_reaction_calls) == 0, "Should not reject parent message even with thread_ts"
+
+
 class TestMessageTimestampHandling:
     """Tests for base timestamp selection logic"""
     
